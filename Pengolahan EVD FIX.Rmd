@@ -1,0 +1,831 @@
+---
+title: "Analisis Indeks Standar Pencemaran Udara (ISPU) DKI Jakarta"
+author: "Kelompok 9"
+date: "Preprocessing Data"
+output: html_document
+---
+```{r}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 10,
+  fig.height = 6
+)
+```
+
+# 1. Load Library
+
+```{r load-libraries}
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lubridate)
+library(car)
+library(knitr)
+library(gridExtra)
+library(stringr)
+```
+
+# 2. Import Data
+
+```{r import-data}
+setwd("C:/Users/ACER/Downloads/RStudio/EVD/FP/File")
+df_2023 <- read_excel("data-indeks-standar-pencemar-udara-(ispu)-di-provinsi-dki-jakarta-2023-(1764196544445).xlsx")
+```
+
+# 3. Pre-processing Data
+
+## 3.1 Pemeriksaan Head dan Tail Data
+
+```{r head-tail}
+head(df_2023)
+tail(df_2023)
+```
+
+## 3.2 Pemeriksaan Struktur dan Tipe Data
+
+```{r}
+cat("Jumlah baris:", nrow(df_2023), "\n")
+cat("Jumlah kolom:", ncol(df_2023), "\n\n")
+sapply(df_2023, class)
+```
+
+```{r struktur-tipe-data}
+df_list <- lapply(df_2023[c("periode_data", "tanggal", "stasiun", "pm_sepuluh",
+                            "pm_duakomalima", "sulfur_dioksida", "karbon_monoksida", 
+                            "ozon", "nitrogen_dioksida", "max",
+                            "parameter_pencemar_kritis", "kategori")], unique)
+
+str(df_list, vec.len = 999999)
+```
+
+```{r}
+df_2023$tanggal = as.Date(df_2023$tanggal)
+
+df_2023$pm_sepuluh[df_2023$pm_sepuluh %in% c("-", "---")] <- NA
+df_2023$pm_sepuluh <- as.numeric(df_2023$pm_sepuluh)
+df_2023$pm_duakomalima[df_2023$pm_duakomalima %in% c("-", "---")] <- NA
+df_2023$pm_duakomalima <- as.numeric(df_2023$pm_duakomalima)
+df_2023$sulfur_dioksida[df_2023$sulfur_dioksida %in% c("-", "---")] <- NA
+df_2023$sulfur_dioksida <- as.numeric(df_2023$sulfur_dioksida)
+df_2023$karbon_monoksida[df_2023$karbon_monoksida %in% c("-", "---")] <- NA
+df_2023$karbon_monoksida <- as.numeric(df_2023$karbon_monoksida)
+df_2023$ozon[df_2023$ozon %in% c("-", "---")] <- NA
+df_2023$ozon <- as.numeric(df_2023$ozon)
+df_2023$nitrogen_dioksida[df_2023$nitrogen_dioksida %in% c("-", "---")] <- NA
+df_2023$nitrogen_dioksida <- as.numeric(df_2023$nitrogen_dioksida)
+df_2023$max[df_2023$max %in% c("-", "---")] <- NA
+df_2023$max <- as.numeric(df_2023$max)
+
+df_2023$stasiun = as.factor(df_2023$stasiun)
+```
+
+## 3.3 Identifikasi dan Penanganan Missing Values
+
+### 3.3.1 Identifikasi  Missing Values
+
+```{r missing-values-2023}
+colSums(is.na(df_2023))
+
+tampilkan_missing_kolom <- function(df, kolom) {
+  missing_rows <- df[is.na(df[[kolom]]), ]
+  return(missing_rows)
+}
+
+tampilkan_missing_kolom(df_2023, "pm_sepuluh")
+tampilkan_missing_kolom(df_2023, "pm_duakomalima")
+tampilkan_missing_kolom(df_2023, "sulfur_dioksida")
+tampilkan_missing_kolom(df_2023, "karbon_monoksida")
+tampilkan_missing_kolom(df_2023, "ozon")
+tampilkan_missing_kolom(df_2023, "nitrogen_dioksida")
+tampilkan_missing_kolom(df_2023, "max")
+```
+
+### 3.3.2 Penanganan Missing Values
+
+```{r}
+df_cleaned <- df_2023
+```
+
+#### Mengisi Missing Values dengan Interpolasi
+```{r interpolasi}
+df_cleaned <- df_cleaned %>%
+  arrange(tanggal, stasiun) %>%
+  group_by(stasiun) %>%
+  mutate(
+    pm_sepuluh = round(zoo::na.approx(pm_sepuluh, na.rm = FALSE)),
+    pm_duakomalima = round(zoo::na.approx(pm_duakomalima, na.rm = FALSE)),
+    sulfur_dioksida = round(zoo::na.approx(sulfur_dioksida, na.rm = FALSE)),
+    karbon_monoksida = round(zoo::na.approx(karbon_monoksida, na.rm = FALSE)),
+    ozon = round(zoo::na.approx(ozon, na.rm = FALSE)),
+    nitrogen_dioksida = round(zoo::na.approx(nitrogen_dioksida, na.rm = FALSE))
+  ) %>%
+  ungroup()
+```
+
+#### Mengisi Missing Values dengan Median
+```{r median-imputation}
+parameter <- c("pm_sepuluh", "pm_duakomalima", "sulfur_dioksida",
+              "karbon_monoksida", "ozon", "nitrogen_dioksida")
+
+df_cleaned <- df_cleaned %>%
+  group_by(tanggal) %>%
+  mutate(across(all_of(parameter), ~ ifelse(is.na(.x),
+                                           round(median(.x, na.rm = TRUE)),
+                                           .x)))
+
+```
+
+#### Penanganan Inkonsistensi Data Kolom max
+```{r max-imputation}
+df_cleaned <- df_cleaned %>%
+  rowwise() %>%
+  mutate(
+    max = max(c_across(all_of(parameter)), na.rm = TRUE),
+    parameter_pencemar_kritis = parameter[which.max(c_across(all_of(parameter)))]
+  ) %>%
+  ungroup()
+```
+
+#### Penanganan Inkonsistensi Data Kolom kategori
+```{r kategori-imputation}
+df_cleaned <- df_cleaned %>%
+  mutate(
+    kategori = case_when(
+      max >= 0 & max <= 50 ~ "BAIK",
+      max >= 51 & max <= 100 ~ "SEDANG",
+      max >= 101 & max <= 199 ~ "TIDAK SEHAT",
+      max >= 200 & max <= 299 ~ "SANGAT TIDAK SEHAT",
+      max >= 300 ~ "BERBAHAYA",
+      TRUE ~ "TIDAK ADA DATA"
+    )
+  )
+```
+
+#### Verifikasi Missing Values Setelah Penanganan
+```{r}
+tampilkan_missing_kolom(df_cleaned, "pm_sepuluh")
+tampilkan_missing_kolom(df_cleaned, "pm_duakomalima")
+tampilkan_missing_kolom(df_cleaned, "sulfur_dioksida")
+tampilkan_missing_kolom(df_cleaned, "karbon_monoksida")
+tampilkan_missing_kolom(df_cleaned, "ozon")
+tampilkan_missing_kolom(df_cleaned, "nitrogen_dioksida")
+tampilkan_missing_kolom(df_cleaned, "max")
+```
+
+### 3.3.3 Visualisasi Missing Values Sebelum dan Sesudah Penanganan
+
+```{r visualisasi-missing-values, fig.height=6, fig.width=10}
+parameter <- c("pm_sepuluh", "pm_duakomalima", "sulfur_dioksida",
+               "karbon_monoksida", "ozon", "nitrogen_dioksida")
+missing_pct_before <- colSums(is.na(df_2023[, parameter])) / nrow(df_2023) * 100
+barplot(missing_pct_before, 
+        main = "Missing Values SEBELUM Preprocessing",
+        ylab = "Persentase Missing (%)",
+        las = 2, 
+        col = "#dd4b39",
+        ylim = c(0, max(missing_pct_before) + 5))
+
+missing_pct_after <- colSums(is.na(df_cleaned[, parameter])) / nrow(df_cleaned) * 100
+barplot(missing_pct_after, 
+        main = "Missing Values SETELAH Preprocessing",
+        ylab = "Persentase Missing (%)",
+        las = 2,
+        col = "#00a65a",
+        ylim = c(0, max(missing_pct_before) + 5))
+```
+
+## 3.4 Cek dan Hapus Duplikat
+
+```{r duplikat}
+cat("Jumlah duplikat:", sum(duplicated(df_cleaned)), "\n")
+```
+
+## 3.5 Koreksi Tipe Data
+
+```{r tipe-data}
+cat("Jumlah baris:", nrow(df_cleaned), "\n")
+cat("Jumlah kolom:", ncol(df_cleaned), "\n\n")
+df_list <- lapply(df_cleaned[c("periode_data", "tanggal", "stasiun", "pm_sepuluh", "pm_duakomalima",
+                            "sulfur_dioksida", "karbon_monoksida", "ozon",
+                            "nitrogen_dioksida", "max",
+                            "parameter_pencemar_kritis", "kategori")], unique)
+
+str(df_list, vec.len = 999999)
+```
+
+#### Mengubah Tipe Data Kategori dan Parameter Pencemar Kritis
+```{r}
+df_cleaned$kategori = as.factor(df_cleaned$kategori)
+df_cleaned$parameter_pencemar_kritis = as.factor(df_cleaned$parameter_pencemar_kritis)
+```
+
+## 3.6 Identifikasi dan Penanganan Nilai Tidak Logis dan Inkonsistensi Data
+
+### 3.6.1 Identifikasi Nilai Tidak Logis
+```{r data-tidak-logis}
+# Cek nilai negatif
+cat("Nilai negatif:\n")
+cat("pm10:", sum(df_cleaned$pm_sepuluh < 0, na.rm = TRUE), "\n")
+cat("pm2.5:", sum(df_cleaned$pm_duakomalima < 0, na.rm = TRUE), "\n")
+cat("so2:", sum(df_cleaned$sulfur_dioksida < 0, na.rm = TRUE), "\n")
+cat("co:", sum(df_cleaned$karbon_monoksida < 0, na.rm = TRUE), "\n")
+cat("o3:", sum(df_cleaned$ozon < 0, na.rm = TRUE), "\n")
+cat("no2:", sum(df_cleaned$nitrogen_dioksida < 0, na.rm = TRUE), "\n")
+
+# Cek nilai ekstrem
+cat("\nNilai max > 500:", sum(df_cleaned$max > 500, na.rm = TRUE), "\n")
+```
+
+### 3.6.2 Penanganan Inkonsistensi Data Kolom stasiun
+```{r cek-stasiun}
+df_cleaned <- df_cleaned %>%
+  mutate(stasiun = str_squish(stasiun),
+         stasiun = trimws(stasiun),
+         stasiun = case_when(
+           stasiun %in% c("DKI5 Kebon Jeruk Jakarta Barat", "DKI5 Kebon Jeruk") ~ "DKI5 Kebon Jeruk",
+           TRUE ~ stasiun
+         ),
+         stasiun = as.factor(stasiun))
+```
+
+## 3.7 Deteksi Outlier
+
+#### Fungsi Deteksi Outlier Menggunakan IQR
+
+```{r fungsi-outlier}
+deteksi_outliers <- function(df, col) {
+  Q1 <- quantile(df[[col]], 0.25, na.rm = TRUE)
+  Q3 <- quantile(df[[col]], 0.75, na.rm = TRUE)
+  IQR_val <- Q3 - Q1
+  lower <- Q1 - 1.5 * IQR_val
+  upper <- Q3 + 1.5 * IQR_val
+  
+  cat(sprintf("Variabel %s\n", col))
+  cat(sprintf("Batas bawah : %.2f\n", lower))
+  cat(sprintf("Batas atas  : %.2f\n\n", upper))
+  
+  outliers <- df[df[[col]] < lower | df[[col]] > upper, ]
+  outliers <- outliers[!is.na(outliers[[col]]), ]
+  
+  if (nrow(outliers) == 0) {
+    cat("Tidak ada outlier.\n\n")
+  } else {
+    cat("Baris yang mengandung outlier:\n")
+    print(head(outliers))
+    cat(sprintf("\nTotal outlier: %d baris\n\n", nrow(outliers)))
+  }
+  
+  return(outliers)
+}
+```
+
+### 3.7.1 Deteksi Outlier Menggunakan IQR
+
+```{r deteksi-outlier-per-kolom}
+for (col in parameter) {
+  outliers <- deteksi_outliers(df_cleaned, col)
+}
+```
+
+### 3.7.2 Deteksi Outlier Menggunakan Boxplot
+
+```{r boxplot-outlier, fig.height=10}
+library(plotly)
+
+outlier_vars <- c("pm_sepuluh", "pm_duakomalima", "sulfur_dioksida",
+                  "karbon_monoksida", "ozon", "nitrogen_dioksida", "max")
+
+for (var in outlier_vars) {
+  p <- plot_ly(df_cleaned, y = ~get(var), type = "box",
+               name = var,
+               marker = list(color = "#00a65a")) %>% # Warna hijau #00a65a
+    layout(title = paste("Deteksi Outlier:", var),
+           yaxis = list(title = var))
+  print(p)
+}
+```
+
+### 3.7.3 Model Regresi dengan Outlier
+
+#### Pembuatan Variabel Tahun, Bulan, Hari untuk Model Regresi
+```{r}
+df_cleaned$tahun <- format(df_cleaned$tanggal, "%Y") %>% as.numeric()
+df_cleaned$bulan <- format(df_cleaned$tanggal, "%m") %>% as.numeric()
+df_cleaned$hari  <- format(df_cleaned$tanggal, "%d") %>% as.numeric()
+```
+
+#### Penghapusan Kolom Redundant
+```{r hapus-kolom}
+df_cleaned <- df_cleaned %>%
+  dplyr::select(-periode_data)
+```
+
+#### Model 1
+```{r model1}
+model1 <- lm(ozon ~ pm_sepuluh + pm_duakomalima + sulfur_dioksida +
+                      karbon_monoksida + nitrogen_dioksida +
+                      stasiun + kategori + tahun + bulan + hari,
+                    data = df_cleaned)
+
+summary(model1)
+```
+
+### 3.7.4 Influential Observations
+
+#### Hitung Leverage, Studentized Residuals, Cook's Distance
+```{r influential-obs}
+# Leverage
+hat_values <- hatvalues(model1)
+
+# Studentized residuals
+student_resid <- rstudent(model1)
+
+# Cook's distance
+cooks_d <- cooks.distance(model1)
+
+# Data frame influence
+influence_data <- data.frame(
+  index = 1:nrow(df_cleaned),
+  leverage = hat_values,
+  student_resid = student_resid,
+  cooks_distance = cooks_d
+)
+
+# Observasi berdasarkan Studentized residuals
+influence_data %>%
+  arrange(desc(student_resid)) %>%
+  head(15) %>%
+  kable()
+influence_data %>%
+  arrange(student_resid) %>%
+  head(5) %>%
+  kable()
+
+# Observasi berdasarkan Cook's distance
+influence_data %>%
+  arrange(desc(cooks_distance)) %>%
+  head(5) %>%
+  kable()
+```
+
+#### Batas Threshold Leverage
+```{r threshold-leverage}
+n <- nrow(df_cleaned)
+p <- length(coef(model1)) - 1
+h_bar <- (p + 1) / n
+threshold_3h <- 3 * h_bar
+
+cat("Rata-rata leverage (h_bar):", h_bar, "\n")
+cat("Threshold 3h:", threshold_3h, "\n")
+cat("Jumlah observasi dengan leverage > 3h:", 
+    sum(hat_values > threshold_3h), "\n")
+```
+
+#### Influence Plot
+```{r influence-plot, fig.height=8}
+par(mfrow = c(2, 2)) 
+
+hat_values <- hatvalues(model1)
+student_resid <- rstudent(model1)
+cooks_d <- cooks.distance(model1)
+n <- nrow(df_cleaned)
+p <- length(coef(model1)) - 1
+threshold_3h <- 3 * (p + 1) / n
+
+# 1. Leverage Values
+plot(hat_values, main = "Leverage Values", 
+     ylab = "Leverage", xlab = "Index",
+     pch = 19, col = ifelse(hat_values > threshold_3h, "red", "blue"))
+abline(h = threshold_3h, col = "red", lty = 2, lwd = 2) 
+
+# 2. Studentized Residuals
+plot(student_resid, main = "Studentized Residuals",
+     ylab = "Studentized Residuals", xlab = "Index",
+     pch = 19, col = ifelse(abs(student_resid) > 2, "red", "blue"))
+abline(h = c(-2, 2), col = "red", lty = 2, lwd = 2) 
+
+# 3. Cook's Distance
+plot(cooks_d, main = "Cook's Distance",
+     ylab = "Cook's Distance", xlab = "Index",
+     pch = 19, col = ifelse(cooks_d > (4/n), "red", "blue"))
+abline(h = 4/n, col = "red", lty = 2, lwd = 2) 
+
+# 4. Influence Plot
+influencePlot(model1, main = "Influence Plot",
+              sub = "Ukuran lingkaran = Cook's distance")
+
+par(mfrow = c(1, 1))
+```
+
+### 3.7.5 Model Tanpa Influential Observations
+```{r model2}
+# Identifikasi index observasi yang akan dihapus
+high_leverage_index <- which(hat_values > threshold_3h)
+high_student_resid_index <- which(abs(student_resid) > 2)
+high_cooks_distance_index <- which(cooks_d > (4 / nrow(df_cleaned)))
+
+remove_index <- unique(c(high_leverage_index,
+                         high_student_resid_index,
+                         high_cooks_distance_index))
+
+df_model2 <- df_cleaned[-remove_index, ]
+
+# Model baru
+model_influential <- lm(ozon ~ pm_sepuluh + pm_duakomalima + sulfur_dioksida +
+                      karbon_monoksida + nitrogen_dioksida +
+                      stasiun + kategori + tahun + bulan + hari,
+                    data = df_model2)
+
+summary(model_influential)
+```
+
+### 3.7.6 Hapus Outlier IQR
+
+```{r model-outlier-iqr}
+hapus_outliers <- function(df, col) {
+  Q1 <- quantile(df[[col]], 0.25, na.rm = TRUE)
+  Q3 <- quantile(df[[col]], 0.75, na.rm = TRUE)
+  IQR_val <- Q3 - Q1
+  
+  lower <- Q1 - 1.5 * IQR_val
+  upper <- Q3 + 1.5 * IQR_val
+  
+  cat(sprintf("Variabel %s\n", col))
+  
+  # Hitung jumlah sebelum
+  jumlah_awal <- nrow(df)
+  
+  # Filter baris tanpa outlier
+  df_clean <- df[df[[col]] >= lower & df[[col]] <= upper | is.na(df[[col]]), ]
+  
+  # Hitung jumlah outlier yang terhapus
+  jumlah_akhir <- nrow(df_clean)
+  jumlah_terhapus <- jumlah_awal - jumlah_akhir
+  
+  cat(sprintf("Total outlier yang dihapus: %d baris\n\n", jumlah_terhapus))
+  
+  return(df_clean)
+}
+```
+
+```{r}
+for (col in parameter) {
+  df_model3 <- hapus_outliers(df_cleaned, col)
+}
+```
+
+### 3.7.7 Model Setelah Hapus Outlier IQR
+
+```{r model3-outlier-iqr}
+model_iqr <- lm(ozon ~ pm_sepuluh + pm_duakomalima + sulfur_dioksida +
+                      karbon_monoksida + nitrogen_dioksida +
+                      stasiun + kategori + tahun + bulan + hari,
+                    data = df_model3)
+
+summary(model_iqr)
+```
+
+## 3.8 Normalisasi/Standarisasi
+
+### 3.8.1 Standarisasi Data
+
+```{r standarisasi}
+# Standarisasi (z-score)
+df_model4 <- df_model2 %>%
+  mutate(
+    pm10_std = scale(pm_sepuluh)[,1],
+    pm2.5_std = scale(pm_duakomalima)[,1],
+    so2_std = scale(sulfur_dioksida)[,1],
+    co_std = scale(karbon_monoksida)[,1],
+    o3_std = scale(ozon)[,1],
+    no2_std = scale(nitrogen_dioksida)[,1]
+  )
+
+model_standarisasi <- lm(o3_std ~ pm10_std + pm2.5_std + so2_std + co_std + no2_std +
+                      stasiun + kategori + tahun + bulan + hari,
+             data = df_model4)
+
+summary(model_standarisasi)
+```
+
+#### Perbandingan Model
+```{r perbandingan-model}
+summary_model1 <- summary(model1)
+summary_model_influential <- summary(model_influential)
+summary_model_iqr <- summary(model_iqr)
+summary_model_standarisasi <- summary(model_standarisasi)
+
+comparison_table <- data.frame(
+  Model = c("Model tanpa penanganan outlier", "Model setelah menghapus influential observation", "Model setelah menghapus outlier IQR", "Model setelah menghapus influential observation dan standarisasi"),
+  Multiple_R_Squared = c(summary_model1$r.squared,
+                         summary_model_influential$r.squared,
+                         summary_model_iqr$r.squared,
+                         summary_model_standarisasi$r.squared),
+  Adjusted_R_Squared = c(summary_model1$adj.r.squared,
+                         summary_model_influential$adj.r.squared,
+                         summary_model_iqr$adj.r.squared,
+                         summary_model_standarisasi$adj.r.squared)
+)
+
+kable(comparison_table, digits = 4, caption = "Perbandingan R-squared dan Adjusted R-squared dari Model")
+```
+
+#### Simpan Data yang Sudah Dibersihkan
+```{r}
+#write.csv(df_model2, "data_ispu_dki_jakarta_2023_bersih.csv", row.names = FALSE)
+```
+
+# 4. Analisis Data
+
+```{r head-tail-analis}
+df_analis <- df_model2
+head(df_analis)
+tail(df_analis)
+```
+
+## 4.1 Statistika Deskriptif
+
+### 4.1.1 Ukuran Pemusatan Data
+
+```{r ukuran pemusatan}
+summary(df_analis)
+```
+
+### 4.1.2 Ukuran Penyebaran Data
+
+```{r ukuran penyebaran data numerik}
+library(psych)
+describe(df_analis %>% dplyr::select(where(is.numeric)))
+```
+```{r ukuran penyebaran data kategorik}
+sum_kategorik <- df_analis %>% 
+  dplyr::select(where(is.factor)) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "value") %>%
+  group_by(variable, value) %>%
+  summarise(n = n(), .groups = "drop_last") %>%
+  mutate(percent = round(n / sum(n) * 100, 2))
+
+sum_kategorik
+```
+
+### 4.1.3 Visualisasi Data
+
+#### 4.1.3.1 Kategori ISPU
+
+```{r pie chart}
+library(plotly)
+
+kategori_summary <- df_analis %>%
+  group_by(kategori) %>%
+  summarise(count = n()) %>%
+  ungroup()
+
+custom_colors <- c("SEDANG" = "#FFC300", 
+                   "BAIK" = "#38761D",
+                   "TIDAK SEHAT" = "#E9967A",
+                   "SANGAT TIDAK SEHAT" = "#990099",
+                   "BERBAHAYA" = "#CC0000")
+
+kategori_summary <- kategori_summary %>%
+  mutate(kategori = factor(kategori, levels = names(custom_colors)[names(custom_colors) %in% kategori])) %>%
+  arrange(kategori)
+
+plot_ly(kategori_summary, labels = ~kategori, values = ~count, 
+        type = 'pie',
+        marker = list(colors = custom_colors[kategori_summary$kategori]),
+        textinfo = 'percent+label',
+        insidetextfont = list(color = '#000000')) %>%
+  layout(title = 'Distribusi ISPU Berdasarkan Kategori',
+         showlegend = TRUE)
+```
+
+#### 4.1.3.2 Rata-rata ISPU per Stasiun
+
+```{r bar chart}
+# Rata-rata ISPU per Stasiun
+data_ispu_avg <- df_analis %>%
+  group_by(stasiun) %>%
+  summarise(Avg_ISPU = mean(max, na.rm = TRUE)) %>%
+  arrange(desc(Avg_ISPU))
+
+plot_ly(data_ispu_avg, x = ~stasiun, y = ~Avg_ISPU, type = "bar",
+        marker = list(color = ~Avg_ISPU, colorscale = "Reds")) %>% 
+  layout(title = "Rata-rata ISPU per Stasiun",
+         xaxis = list(title = "Stasiun"),
+         yaxis = list(title = "Rata-rata ISPU"))
+```
+
+#### 4.2.3.3 Tren ISPU Sepanjang Waktu
+
+```{r tren}
+daily_trend <- df_analis %>%
+  group_by(tanggal) %>%
+  summarise(avg_daily_ispu = mean(max, na.rm = TRUE))
+
+plot_ly(daily_trend, x = ~tanggal, y = ~avg_daily_ispu, type = 'scatter', 
+        mode = 'lines', line = list(color = '#00a65a', width = 2)) %>%
+  layout(title = "Tren Rata-rata ISPU Sepanjang Waktu",
+         xaxis = list(title = "Tanggal"),
+         yaxis = list(title = "Rata-rata ISPU Harian"))
+```
+
+#### 4.2.3.4 Konsentrasi Polutan
+
+```{r boxplot}
+library(plotly)
+library(tidyr)
+library(dplyr)
+
+pollutant_cols <- c("karbon_monoksida", "nitrogen_dioksida", "ozon", 
+                    "pm_sepuluh", "pm_duakomalima", "sulfur_dioksida")
+
+# Transformasi data ke format panjang
+df_long <- df_analis %>%
+  dplyr::select(all_of(pollutant_cols)) %>%
+  tidyr::pivot_longer(cols = everything(), names_to = "Pollutant", values_to = "Concentration") %>%
+  mutate(Pollutant_Label = case_match(
+    Pollutant,
+    "karbon_monoksida" ~ "CO",
+    "nitrogen_dioksida" ~ "NO2",
+    "ozon" ~ "O3",
+    "pm_sepuluh" ~ "PM10",
+    "pm_duakomalima" ~ "PM2.5",
+    "sulfur_dioksida" ~ "SO2",
+    .default = Pollutant
+  ))
+
+# Menentukan Urutan
+pollutant_order <- c("CO", "NO2", "O3", "PM10", "PM2.5", "SO2")
+# Warna kustom (Hijau muda, Hijau teal, Biru muda, Merah muda, Oranye, Kuning)
+custom_colors_box <- c("#90EE90", "#20B2AA", "#ADD8E6", "#FFB6C1", "#FFA07A", "#FFD700") 
+
+plot_ly(df_long, 
+        x = ~factor(Pollutant_Label, levels = pollutant_order), 
+        y = ~Concentration, 
+        color = ~factor(Pollutant_Label, levels = pollutant_order), 
+        type = 'box',
+        colors = custom_colors_box) %>%
+  layout(title = "Distribusi Konsentrasi Polutan",
+         xaxis = list(title = "Polutan"),
+         yaxis = list(title = "Konsentrasi (µg/m³)"),
+         showlegend = FALSE)
+```
+
+## 4.2 Regresi Linear
+
+```{r model awal}
+model_regresi <- lm(ozon ~ pm_sepuluh + pm_duakomalima + sulfur_dioksida +
+                      karbon_monoksida + nitrogen_dioksida +
+                      stasiun + kategori + tahun + bulan + hari,
+                    data = df_analis)
+summary(model_regresi)
+```
+## 4.3 Uji Asumsi
+
+### 4.3.1 Uji Linearitas
+
+```{r uji linearitas}
+library(lmtest)
+resettest(model_regresi)
+```
+#### Interpretasi: Tidak Memenuhi
+
+### 4.3.2 Uji Normalitas
+
+```{r uji normalitas}
+resid_std <- scale(residuals(model_regresi))
+ks.test(resid_std, "pnorm")
+```
+
+#### Interpretasi: Memenuhi
+
+### 4.3.3 Uji Non-Multikolinearitas
+
+```{r uji non-multikolinearitas}
+library(car)
+vif(model_regresi)
+```
+
+#### Interpretasi: Memenuhi
+
+### 4.3.4 Uji Homoskedastisitas
+
+```{r uji homoskedastisitas}
+library(skedastic)
+glejser(model_regresi)
+```
+
+#### Interpretasi: Tidak Memenuhi
+
+### 4.3.5 Uji Non-Autokorelasi
+```{r uji non-autokorelasi}
+library(lmtest)
+dwtest(model_regresi)
+```
+
+#### Interpretasi: Tidak Memenuhi
+
+## 4.4 Pergantian Model Regresi
+
+### 4.4.1 Regresi GLM Poisson
+
+```{r}
+df_poisson <- df_analis
+```
+
+```{r GLM log poisson}
+model_poisson <- glm(ozon ~ pm_sepuluh + pm_duakomalima + sulfur_dioksida +
+                     karbon_monoksida + nitrogen_dioksida + stasiun + 
+                     kategori + tahun + bulan + hari,
+                     family = poisson(link = "log"),
+                     data = df_poisson)
+summary(model_poisson)
+```
+
+```{r uji dispersi}
+library(AER)
+dispersiontest(model_poisson, alternative = "greater")
+```
+
+### 4.4.2 Regresi GLM Binomial Negatif
+
+```{r}
+library(MASS)
+
+df_analis <- df_analis %>%
+  arrange(tahun, bulan, hari) %>%
+  group_by(stasiun) %>% 
+  mutate(ozon_lag1 = lag(ozon, n = 1)) %>%
+  ungroup()
+
+data_model_nb <- na.omit(df_analis)
+```
+
+```{r}
+model_neg_bin <- glm.nb(ozon ~ pm_sepuluh + pm_duakomalima + sulfur_dioksida + 
+                         karbon_monoksida + nitrogen_dioksida + stasiun + 
+                         kategori + tahun + bulan + hari,
+                         data = data_model_nb)
+
+summary(model_neg_bin)
+```
+
+### 4.4.3 Uji Serentak
+
+```{r}
+model_null <- glm.nb(ozon ~ 1, data = data_model_nb)
+anova(model_null, model_neg_bin, test = "LRT")
+```
+
+### 4.4.3 Perbandingan Kedua Hasil Regresi
+
+```{r}
+aic_poisson <- AIC(model_poisson)
+bic_poisson <- BIC(model_poisson)
+
+aic_neg_bin <- AIC(model_neg_bin)
+bic_neg_bin <- BIC(model_neg_bin)
+
+perbandingan_metrik <- data.frame(
+  Model = c("Poisson", "Binomial Negatif"),
+  AIC = c(aic_poisson, aic_neg_bin),
+  BIC = c(bic_poisson, bic_neg_bin)
+)
+
+print(perbandingan_metrik)
+```
+
+### 4.4.4 Visualisasi Regresi
+
+```{r scatter plot}
+df_reg_plot <- df_analis %>%
+  arrange(tahun, bulan, hari) %>%
+  group_by(stasiun) %>%
+  
+  # Membuat variabel ozon_lag1
+  mutate(ozon_lag1 = lag(ozon, n = 1)) %>%
+  ungroup() %>%
+  
+  # Menghapus baris yang memiliki NA di ozon_lag1
+  filter(!is.na(ozon_lag1))
+
+df_reg_plot$predicted <- predict(model_neg_bin, newdata = df_reg_plot, type = "response")
+
+plot_ly(df_reg_plot, x = ~ozon, y = ~predicted, type = "scatter", mode = "markers",
+        name = "Actual vs Predicted",
+        marker = list(opacity = 0.5, color = "#3c8dbc")) %>% 
+
+  add_trace(x = c(min(df_reg_plot$ozon), max(df_reg_plot$ozon)),
+            y = c(min(df_reg_plot$ozon), max(df_reg_plot$ozon)),
+            mode = "lines", name = "Prediksi Sempurna",
+            line = list(color = "red", dash = "dash")) %>%
+            
+  layout(title = "Nilai Aktual vs Prediksi Konsentrasi O₃ (Model Binomial Negatif)",
+         xaxis = list(title = "O₃ Aktual (μg/m³)"),
+         yaxis = list(title = "O₃ Prediksi (μg/m³)")
+         )
+```
+
