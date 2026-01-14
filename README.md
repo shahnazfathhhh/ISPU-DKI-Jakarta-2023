@@ -1,1 +1,1 @@
-https://shahnazfatharani.shinyapps.io/mirzajessevia/
+web deploy: https://shahnazfatharani.shinyapps.io/mirzajessevia/
